@@ -7,7 +7,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8727688545:AAFn3S3Bv1TXXYZcAmfGnlaYFydk9kC5wGw'
+API_TOKEN = '8727688545:AAFyk0-QYkKadxVTDMyvK_JwLbsRkJEAJDE'
 CREATORS = [6156296807, 8163861382]
 CREATOR_USERNAME = "@fakevenx"
 
