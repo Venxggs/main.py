@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import asyncio
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -8,30 +9,28 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 # --- SOZLAMALAR ---
 API_TOKEN = '8727688545:AAHFx47Uq5eu4NkMisQ8Pwr2omHv4QP83hI'
 CREATORS = [6156296807, 8163861382]
-CREATOR_USERNAME = "@fakevenx" # O'zingizning usernameingizni bering
+CREATOR_USERNAME = "@creator_username"
 
-# Loggingni sozlash
 logging.basicConfig(level=logging.INFO)
-
-# Bot va Dispatcher
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# --- BAZANI SOZLASH ---
+# --- BAZA ---
 def init_db():
     conn = sqlite3.connect('data.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS animes (id TEXT PRIMARY KEY, file_id TEXT)''')
+    # Jadvalni o'zgartirdik: bitta ID ga bir nechta file_id va qism raqami tushadi
+    c.execute('''CREATE TABLE IF NOT EXISTS animes 
+                 (anime_id TEXT, file_id TEXT, part_num INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS ads (username TEXT PRIMARY KEY)''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- HOLATLAR ---
 class AdminStates(StatesGroup):
-    waiting_for_video = State()
+    waiting_for_videos = State()
     waiting_for_id = State()
     waiting_for_ad = State()
 
@@ -39,7 +38,7 @@ class AdminStates(StatesGroup):
 def get_main_kb(user_id):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     if user_id in CREATORS:
-        kb.add(types.KeyboardButton("Panel"))
+        kb.add("Panel")
     return kb
 
 def get_panel_kb():
@@ -48,7 +47,7 @@ def get_panel_kb():
     kb.add("Bekor qilish")
     return kb
 
-# --- ASOSIY HANDLERLAR ---
+# --- HANDLERLAR ---
 
 @dp.message_handler(commands=['start'], state="*")
 async def start_cmd(message: types.Message, state: FSMContext):
@@ -56,144 +55,112 @@ async def start_cmd(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     args = message.get_args()
 
-    # 1. Majburiy obunani tekshirish (Faqat oddiy foydalanuvchilar uchun)
     if user_id not in CREATORS:
         conn = sqlite3.connect('data.db')
         ads = conn.execute("SELECT username FROM ads").fetchall()
         conn.close()
-        
-        not_subbed = []
         for ad in ads:
             try:
                 member = await bot.get_chat_member(chat_id=ad[0], user_id=user_id)
                 if member.status in ['left', 'kicked']:
-                    not_subbed.append(ad[0])
-            except:
-                continue
+                    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Obuna bo'lish", url=f"https://t.me/{ad[0].replace('@','')}"))
+                    await message.answer(f"Botdan foydalanish uchun {ad[0]} kanaliga obuna bo'ling!", reply_markup=markup)
+                    return
+            except: continue
 
-        if not_subbed:
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            for ch in not_subbed:
-                markup.add(types.InlineKeyboardButton(text="Obuna bo'lish", url=f"https://t.me/{ch.replace('@','')}"))
-            markup.add(types.InlineKeyboardButton(text="Tekshirish ✅", callback_data="check_sub"))
-            await message.answer("Iltimos, homiylarimizga obuna bo'ling!", reply_markup=markup)
-            return
-
-    # 2. Anime ID orqali kelgan bo'lsa
     if args:
         conn = sqlite3.connect('data.db')
-        res = conn.execute("SELECT file_id FROM animes WHERE id=?", (args,)).fetchone()
+        videos = conn.execute("SELECT file_id, part_num FROM animes WHERE anime_id=? ORDER BY part_num ASC", (args,)).fetchall()
         conn.close()
-        if res:
-            await bot.send_video(user_id, res[0], caption=f"Qism {args}")
+        if videos:
+            for v in videos:
+                await bot.send_video(user_id, v[0], caption=f"Qism {v[1]}")
+                await asyncio.sleep(0.5) # Telegram bloklamasligi uchun
             return
         else:
-            await message.answer("Video topilmadi!")
+            await message.answer("Ushbu ID ostida videolar topilmadi!")
             return
 
-    # 3. Oddiy start xabari
-    if user_id in CREATORS:
-        await message.answer("Xush kelibsiz Creator!", reply_markup=get_main_kb(user_id))
-    else:
-        await message.answer(f"Bu botga yozmang! Bu bot xabarlarni qabul qilmaydi! Reklama uchun: {CREATOR_USERNAME}")
+    await message.answer("Xush kelibsiz!", reply_markup=get_main_kb(user_id))
 
-@dp.callback_query_handler(text="check_sub")
-async def check_sub(call: types.CallbackQuery):
-    user_id = call.from_user.id
-    conn = sqlite3.connect('data.db')
-    ads = conn.execute("SELECT username FROM ads").fetchall()
-    conn.close()
-    
-    is_all_subbed = True
-    for ad in ads:
-        try:
-            member = await bot.get_chat_member(chat_id=ad[0], user_id=user_id)
-            if member.status in ['left', 'kicked']:
-                is_all_subbed = False
-                break
-        except: continue
-        
-    if is_all_subbed:
-        await call.message.delete()
-        await call.message.answer(f"Bu botga yozmang! Bu bot xabarlarni qabul qilmaydi! Reklama uchun: {CREATOR_USERNAME}")
-    else:
-        await call.answer("Siz hali obuna bo'lmagansiz!", show_alert=True)
+# --- ANIME YUKLASH (KO'P VIDEOLI) ---
 
-# --- PANEL FUNKSIYALARI ---
-
-@dp.message_handler(lambda m: m.text == "Panel" and m.from_user.id in CREATORS)
-async def open_panel(message: types.Message):
-    await message.answer("Panel bosildi. Tanlang:", reply_markup=get_panel_kb())
-
-@dp.message_handler(lambda m: m.text == "Bekor qilish", state="*")
-async def cancel_action(message: types.Message, state: FSMContext):
-    await state.finish()
-    await message.answer("Amal bekor qilindi.", reply_markup=get_main_kb(message.from_user.id))
-
-# ANIME YUKLASH
 @dp.message_handler(lambda m: m.text == "Anime Yuklash" and m.from_user.id in CREATORS)
-async def upload_anime_start(message: types.Message):
+async def upload_start(message: types.Message):
     await AdminStates.waiting_for_video.set()
-    await message.answer("Iltimos, video tashlang (Bekor qilish uchun tugmani bosing):")
+    await message.answer("Videolarni ketma-ket yuboring. Tugatgach 'Tugatish' tugmasini bosing.", 
+                         reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Tugatish", "Bekor qilish"))
 
 @dp.message_handler(content_types=['video'], state=AdminStates.waiting_for_video)
-async def get_video(message: types.Message, state: FSMContext):
-    await state.update_data(vid=message.video.file_id)
-    await AdminStates.waiting_for_id.set()
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("Saqlash", "Bekor qilish")
-    await message.answer("Video qabul qilindi. Endi 'Saqlash' tugmasini bosing.", reply_markup=markup)
+async def get_videos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    video_list = data.get('video_list', [])
+    video_list.append(message.video.file_id)
+    await state.update_data(video_list=video_list)
+    await message.answer(f"{len(video_list)}-qism qabul qilindi.")
 
-@dp.message_handler(lambda m: m.text == "Saqlash", state=AdminStates.waiting_for_id)
-async def ask_id(message: types.Message):
-    await message.answer("Iltimos id Kiriting, Faqat raqam:")
+@dp.message_handler(lambda m: m.text == "Tugatish", state=AdminStates.waiting_for_video)
+async def finish_videos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get('video_list'):
+        await message.answer("Hech qanday video yubormadingiz!")
+        return
+    await AdminStates.waiting_for_id.set()
+    await message.answer("Endi ushbu anime uchun umumiy ID kiriting (Faqat raqam):")
 
 @dp.message_handler(state=AdminStates.waiting_for_id)
-async def save_anime_final(message: types.Message, state: FSMContext):
+async def save_anime(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("Iltimos, faqat raqam kiriting!")
+        await message.answer("Faqat raqam kiriting!")
         return
     
     data = await state.get_data()
     anime_id = message.text
-    file_id = data.get('vid')
+    video_list = data.get('video_list')
     
     conn = sqlite3.connect('data.db')
-    try:
-        conn.execute("INSERT INTO animes VALUES (?, ?)", (anime_id, file_id))
-        conn.commit()
-        await message.answer("Saqlandi!", reply_markup=get_main_kb(message.from_user.id))
-        await state.finish()
-    except sqlite3.IntegrityError:
-        await message.answer("Bu ID oldin kiritilgan! Boshqa raqam bering:")
-    finally:
-        conn.close()
+    # Oldin shu ID bo'lsa o'chirib tashlaymiz (yangilash uchun)
+    conn.execute("DELETE FROM animes WHERE anime_id=?", (anime_id,))
+    
+    for index, file_id in enumerate(video_list, start=1):
+        conn.execute("INSERT INTO animes VALUES (?, ?, ?)", (anime_id, file_id, index))
+    
+    conn.commit()
+    conn.close()
+    
+    await state.finish()
+    bot_user = await bot.get_me()
+    await message.answer(f"Saqlandi! Hammasi bo'lib {len(video_list)} ta qism.\nLink: https://t.me/{bot_user.username}?start={anime_id}", 
+                         reply_markup=get_main_kb(message.from_user.id))
 
-# REKLAMA (MAJBURIY OBUNA)
+# --- REKLAMA VA BOSHQALAR (O'zgarishsiz) ---
+@dp.message_handler(lambda m: m.text == "Bekor qilish", state="*")
+async def cancel(message: types.Message, state: FSMContext):
+    await state.finish()
+    await message.answer("Bekor qilindi.", reply_markup=get_main_kb(message.from_user.id))
+
 @dp.message_handler(lambda m: m.text == "Reklama" and m.from_user.id in CREATORS)
 async def ad_start(message: types.Message):
     await AdminStates.waiting_for_ad.set()
-    await message.answer("Kanal yoki guruh usernamesini yuboring (@belgisi bilan):")
+    await message.answer("Kanal usernamesini yuboring (@kanal):")
 
 @dp.message_handler(state=AdminStates.waiting_for_ad)
-async def save_ad_channel(message: types.Message, state: FSMContext):
+async def save_ad(message: types.Message, state: FSMContext):
     username = message.text.strip()
     if not username.startswith("@"):
-        await message.answer("Username @ bilan boshlanishi kerak!")
+        await message.answer("Xato! @ bilan boshlansin.")
         return
-
     try:
-        # Bot kanalda adminligini tekshirish (membersni ko'ra olishi uchun)
-        bot_member = await bot.get_chat_member(chat_id=username, user_id=(await bot.get_me()).id)
-        
+        await bot.get_chat_member(chat_id=username, user_id=(await bot.get_me()).id)
         conn = sqlite3.connect('data.db')
         conn.execute("INSERT OR IGNORE INTO ads VALUES (?)", (username,))
         conn.commit()
         conn.close()
-        
-        await message.answer("Muvaffaqiyatli Reklama kiritildi", reply_markup=get_main_kb(message.from_user.id))
+        await message.answer("Reklama qo'shildi.", reply_markup=get_main_kb(message.from_user.id))
         await state.finish()
     except:
-        await message.answer("Kanal/Guruh ga bot ulanmagan! (Botni o'sha yerda admin qilishingiz kerak)")
+        await message.answer("Bot bu kanalda admin emas!")
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
+        
