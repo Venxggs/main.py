@@ -7,9 +7,9 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8727688545:AAHFx47Uq5eu4NkMisQ8Pwr2omHv4QP83hI'
+API_TOKEN = '8727688545:AAFn3S3Bv1TXXYZcAmfGnlaYFydk9kC5wGw'
 CREATORS = [6156296807, 8163861382]
-CREATOR_USERNAME = "@creator_username"
+CREATOR_USERNAME = "@fakevenx"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
