@@ -7,7 +7,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8727688545:AAEqdbDei89oXVarSUSEsJw0zCEHhQMRn1I'
+API_TOKEN = '8757591530:AAEK0HsczFh7GyQJSGaJqc5TYkAiwFbDRWw'
 CREATORS = [6156296807, 8163861382]
 
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,7 @@ init_db()
 class AdminStates(StatesGroup):
     waiting_for_videos = State()
     waiting_for_id = State()
-    waiting_for_ad = State()
+    waiting_for_ad_add = State()
 
 # --- KLAVIATURALAR ---
 def get_main_kb(user_id):
@@ -44,6 +44,12 @@ def get_panel_kb():
     kb.add("Bekor qilish")
     return kb
 
+def get_ad_manage_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("Reklama qo'shish", "Reklama o'chirish")
+    kb.add("Bekor qilish")
+    return kb
+
 # --- HANDLERLAR ---
 
 @dp.message_handler(commands=['start'], state="*")
@@ -52,6 +58,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     args = message.get_args()
 
+    # Majburiy obuna tekshiruvi
     if user_id not in CREATORS:
         conn = sqlite3.connect('data.db')
         ads = conn.execute("SELECT username FROM ads").fetchall()
@@ -60,7 +67,9 @@ async def start_cmd(message: types.Message, state: FSMContext):
             try:
                 member = await bot.get_chat_member(chat_id=ad[0], user_id=user_id)
                 if member.status in ['left', 'kicked']:
-                    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Obuna bo'lish", url=f"https://t.me/{ad[0].replace('@','')}"))
+                    markup = types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("Obuna bo'lish", url=f"https://t.me/{ad[0].replace('@','')}")
+                    )
                     await message.answer(f"Botdan foydalanish uchun {ad[0]} kanaliga obuna bo'ling!", reply_markup=markup)
                     return
             except: continue
@@ -82,7 +91,70 @@ async def start_cmd(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text == "Panel" and m.from_user.id in CREATORS, state="*")
 async def panel_cmd(message: types.Message):
-    await message.answer("Panelga xush kelibsiz!", reply_markup=get_panel_kb())
+    await message.answer("Panel bo'limi:", reply_markup=get_panel_kb())
+
+# --- REKLAMA BO'LIMI ---
+
+@dp.message_handler(lambda m: m.text == "Reklama" and m.from_user.id in CREATORS, state="*")
+async def ad_menu(message: types.Message):
+    await message.answer("Reklama boshqarish:", reply_markup=get_ad_manage_kb())
+
+@dp.message_handler(lambda m: m.text == "Reklama qo'shish" and m.from_user.id in CREATORS, state="*")
+async def ad_add_start(message: types.Message):
+    await AdminStates.waiting_for_ad_add.set()
+    await message.answer("Kanal usernamesini yuboring (masalan: @kanal_nomi):")
+
+@dp.message_handler(state=AdminStates.waiting_for_ad_add)
+async def ad_add_save(message: types.Message, state: FSMContext):
+    username = message.text.strip()
+    if not username.startswith("@"):
+        await message.answer("Xato! Username @ bilan boshlanishi shart.")
+        return
+    
+    try:
+        # Bot adminligini tekshirish
+        await bot.get_chat_member(chat_id=username, user_id=(await bot.get_me()).id)
+        
+        conn = sqlite3.connect('data.db')
+        conn.execute("INSERT OR IGNORE INTO ads VALUES (?)", (username,))
+        conn.commit()
+        conn.close()
+        await message.answer(f"{username} muvaffaqiyatli qo'shildi.", reply_markup=get_ad_manage_kb())
+        await state.finish()
+    except Exception as e:
+        await message.answer(f"Xato: Bot bu kanalda admin emas yoki kanal topilmadi!")
+
+@dp.message_handler(lambda m: m.text == "Reklama o'chirish" and m.from_user.id in CREATORS, state="*")
+async def ad_delete_list(message: types.Message):
+    conn = sqlite3.connect('data.db')
+    ads = conn.execute("SELECT username FROM ads").fetchall()
+    conn.close()
+    
+    if not ads:
+        await message.answer("Hozircha hech qanday kanal qo'shilmagan.")
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for ad in ads:
+        markup.add(types.InlineKeyboardButton(f"❌ {ad[0]}", callback_data=f"del_ad:{ad[0]}"))
+    
+    await message.answer("O'chirmoqchi bo'lgan kanalingizni tanlang:", reply_markup=markup)
+
+@dp.callback_query_handler(lambda c: c.data.startswith('del_ad:'), state="*")
+async def ad_delete_confirm(callback_query: types.CallbackQuery):
+    ad_username = callback_query.data.split(":")[1]
+    
+    conn = sqlite3.connect('data.db')
+    conn.execute("DELETE FROM ads WHERE username=?", (ad_username,))
+    conn.commit()
+    conn.close()
+    
+    await bot.answer_callback_query(callback_query.id, "Kanal o'chirildi")
+    await bot.edit_message_text(f"{ad_username} ro'yxatdan o'chirildi.", 
+                                callback_query.from_user.id, 
+                                callback_query.message.message_id)
+
+# --- ANIME YUKLASH BO'LIMI ---
 
 @dp.message_handler(lambda m: m.text == "Anime Yuklash" and m.from_user.id in CREATORS, state="*")
 async def upload_start(message: types.Message):
@@ -127,8 +199,7 @@ async def save_anime_final(message: types.Message, state: FSMContext):
 @dp.message_handler(lambda m: m.text == "Bekor qilish", state="*")
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer("Bekor qilindi.", reply_markup=get_main_kb(message.from_user.id))
+    await message.answer("Asosiy menyu:", reply_markup=get_main_kb(message.from_user.id))
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
-                
