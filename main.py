@@ -7,9 +7,8 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8727688545:AAFyk0-QYkKadxVTDMyvK_JwLbsRkJEAJDE'
+API_TOKEN = '8727688545:AAEqdbDei89oXVarSUSEsJw0zCEHhQMRn1I'
 CREATORS = [6156296807, 8163861382]
-CREATOR_USERNAME = "@fakevenx"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -20,9 +19,7 @@ dp = Dispatcher(bot, storage=storage)
 def init_db():
     conn = sqlite3.connect('data.db')
     c = conn.cursor()
-    # Jadvalni o'zgartirdik: bitta ID ga bir nechta file_id va qism raqami tushadi
-    c.execute('''CREATE TABLE IF NOT EXISTS animes 
-                 (anime_id TEXT, file_id TEXT, part_num INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS animes (anime_id TEXT, file_id TEXT, part_num INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS ads (username TEXT PRIMARY KEY)''')
     conn.commit()
     conn.close()
@@ -75,92 +72,63 @@ async def start_cmd(message: types.Message, state: FSMContext):
         if videos:
             for v in videos:
                 await bot.send_video(user_id, v[0], caption=f"Qism {v[1]}")
-                await asyncio.sleep(0.5) # Telegram bloklamasligi uchun
+                await asyncio.sleep(0.5)
             return
         else:
-            await message.answer("Ushbu ID ostida videolar topilmadi!")
+            await message.answer("Xatolik: ID topilmadi.")
             return
 
     await message.answer("Xush kelibsiz!", reply_markup=get_main_kb(user_id))
 
-# --- ANIME YUKLASH (KO'P VIDEOLI) ---
+@dp.message_handler(lambda m: m.text == "Panel" and m.from_user.id in CREATORS, state="*")
+async def panel_cmd(message: types.Message):
+    await message.answer("Panelga xush kelibsiz!", reply_markup=get_panel_kb())
 
-@dp.message_handler(lambda m: m.text == "Anime Yuklash" and m.from_user.id in CREATORS)
+@dp.message_handler(lambda m: m.text == "Anime Yuklash" and m.from_user.id in CREATORS, state="*")
 async def upload_start(message: types.Message):
-    await AdminStates.waiting_for_video.set()
-    await message.answer("Videolarni ketma-ket yuboring. Tugatgach 'Tugatish' tugmasini bosing.", 
-                         reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Tugatish", "Bekor qilish"))
+    await AdminStates.waiting_for_videos.set()
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True).add("Tugatish", "Bekor qilish")
+    await message.answer("Videolarni ketma-ket yuboring. Tugatgach 'Tugatish' bosing.", reply_markup=kb)
 
-@dp.message_handler(content_types=['video'], state=AdminStates.waiting_for_video)
+@dp.message_handler(content_types=['video'], state=AdminStates.waiting_for_videos)
 async def get_videos(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    video_list = data.get('video_list', [])
-    video_list.append(message.video.file_id)
-    await state.update_data(video_list=video_list)
-    await message.answer(f"{len(video_list)}-qism qabul qilindi.")
+    v_list = data.get('video_list', [])
+    v_list.append(message.video.file_id)
+    await state.update_data(video_list=v_list)
+    await message.answer(f"{len(v_list)}-qism qabul qilindi.")
 
-@dp.message_handler(lambda m: m.text == "Tugatish", state=AdminStates.waiting_for_video)
-async def finish_videos(message: types.Message, state: FSMContext):
+@dp.message_handler(lambda m: m.text == "Tugatish", state=AdminStates.waiting_for_videos)
+async def finish_upload(message: types.Message, state: FSMContext):
     data = await state.get_data()
     if not data.get('video_list'):
-        await message.answer("Hech qanday video yubormadingiz!")
+        await message.answer("Video yubormadingiz!")
         return
     await AdminStates.waiting_for_id.set()
-    await message.answer("Endi ushbu anime uchun umumiy ID kiriting (Faqat raqam):")
+    await message.answer("Endi anime ID raqamini kiriting:")
 
 @dp.message_handler(state=AdminStates.waiting_for_id)
-async def save_anime(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Faqat raqam kiriting!")
-        return
-    
-    data = await state.get_data()
+async def save_anime_final(message: types.Message, state: FSMContext):
     anime_id = message.text
+    data = await state.get_data()
     video_list = data.get('video_list')
     
     conn = sqlite3.connect('data.db')
-    # Oldin shu ID bo'lsa o'chirib tashlaymiz (yangilash uchun)
     conn.execute("DELETE FROM animes WHERE anime_id=?", (anime_id,))
-    
-    for index, file_id in enumerate(video_list, start=1):
-        conn.execute("INSERT INTO animes VALUES (?, ?, ?)", (anime_id, file_id, index))
-    
+    for i, f_id in enumerate(video_list, 1):
+        conn.execute("INSERT INTO animes VALUES (?, ?, ?)", (anime_id, f_id, i))
     conn.commit()
     conn.close()
     
+    bot_info = await bot.get_me()
+    await message.answer(f"Saqlandi!\nLink: https://t.me/{bot_info.username}?start={anime_id}", reply_markup=get_main_kb(message.from_user.id))
     await state.finish()
-    bot_user = await bot.get_me()
-    await message.answer(f"Saqlandi! Hammasi bo'lib {len(video_list)} ta qism.\nLink: https://t.me/{bot_user.username}?start={anime_id}", 
-                         reply_markup=get_main_kb(message.from_user.id))
 
-# --- REKLAMA VA BOSHQALAR (O'zgarishsiz) ---
 @dp.message_handler(lambda m: m.text == "Bekor qilish", state="*")
-async def cancel(message: types.Message, state: FSMContext):
+async def cancel_handler(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("Bekor qilindi.", reply_markup=get_main_kb(message.from_user.id))
 
-@dp.message_handler(lambda m: m.text == "Reklama" and m.from_user.id in CREATORS)
-async def ad_start(message: types.Message):
-    await AdminStates.waiting_for_ad.set()
-    await message.answer("Kanal usernamesini yuboring (@kanal):")
-
-@dp.message_handler(state=AdminStates.waiting_for_ad)
-async def save_ad(message: types.Message, state: FSMContext):
-    username = message.text.strip()
-    if not username.startswith("@"):
-        await message.answer("Xato! @ bilan boshlansin.")
-        return
-    try:
-        await bot.get_chat_member(chat_id=username, user_id=(await bot.get_me()).id)
-        conn = sqlite3.connect('data.db')
-        conn.execute("INSERT OR IGNORE INTO ads VALUES (?)", (username,))
-        conn.commit()
-        conn.close()
-        await message.answer("Reklama qo'shildi.", reply_markup=get_main_kb(message.from_user.id))
-        await state.finish()
-    except:
-        await message.answer("Bot bu kanalda admin emas!")
-
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
-        
+                
